@@ -73,21 +73,36 @@ def create_trt_config_from_hf(model_dir,
     moe_n_group = hf_config.n_group
     moe_topk_group = hf_config.topk_group
     moe_routed_scaling_factor = hf_config.routed_scaling_factor
+
+    first_k_dense_replace = hf_config.first_k_dense_replace
+    moe_layer_freq = hf_config.moe_layer_freq
+    scoring_func = hf_config.scoring_func
+    fp8_format = hf_config.fp8_format
+    topk_method = hf_config.topk_method
+
     assert moe_routed_scaling_factor > 0, 'routed_scaling_factor should be greater than 0'
     if hf_config.topk_method == 'group_limited_greedy':
+        moe_topk_method = MoeConfig.TopKMethod.GROUP_LIMITED_GREEDY
         if moe_top_k > 1 and hf_config.norm_topk_prob:
             moe_renorm_mode = MoeConfig.ExpertScaleNormalizationMode.DEVICE_LIMITED_RENORM
         else:
             moe_renorm_mode = MoeConfig.ExpertScaleNormalizationMode.DEVICE_LIMITED
     elif hf_config.topk_method == 'greedy':
+        moe_topk_method = MoeConfig.TopKMethod.GREEDY
         assert moe_routed_scaling_factor == 1.0, 'The combination of topk_method == greedy and routed_scaling_factor != 1.0 is not supported'
         if moe_top_k > 1 and hf_config.norm_topk_prob:
             moe_renorm_mode = MoeConfig.ExpertScaleNormalizationMode.RENORMALIZE
         else:
             moe_renorm_mode = MoeConfig.ExpertScaleNormalizationMode.NONE
+    elif hf_config.topk_method == 'noaux_tc':
+        moe_topk_method = MoeConfig.TopKMethod.NOAUX_TC
+        if moe_top_k > 1 and hf_config.norm_topk_prob:
+            moe_renorm_mode = MoeConfig.ExpertScaleNormalizationMode.DEVICE_LIMITED_RENORM
+        else:
+            moe_renorm_mode = MoeConfig.ExpertScaleNormalizationMode.DEVICE_LIMITED
     else:
         raise AssertionError(
-            'Unsupported topk_method in hf_config: {hf_config.topk_method}')
+            f'Unsupported topk_method in hf_config: {hf_config.topk_method}')
 
     config = {
         'architecture': 'DeepseekV2ForCausalLM',
@@ -129,11 +144,16 @@ def create_trt_config_from_hf(model_dir,
         'moe_num_experts': moe_num_experts,
         'moe_inter_size': moe_inter_size,
         'moe_num_shared_experts': moe_num_shared_experts,
-        'moe_top_k': moe_top_k,
+        'moe_top_k': moe_topk_method,
         'moe_renorm_mode': moe_renorm_mode,
         'moe_n_group': moe_n_group,
         'moe_topk_group': moe_topk_group,
         'moe_routed_scaling_factor': moe_routed_scaling_factor,
+        'topk_method': topk_method,
+        'first_k_dense_replace': first_k_dense_replace,
+        'moe_layer_freq': moe_layer_freq,
+        'scoring_func': scoring_func,
+        'fp8_format': fp8_format,
     }
 
     config.update(override_fields)
@@ -146,8 +166,9 @@ def create_trt_config_from_hf(model_dir,
         normalization_mode=config['moe_renorm_mode'],
         device_limited_n_group=config['moe_n_group'],
         device_limited_topk_group=config['moe_topk_group'],
-        device_limited_routed_scaling_factor=config['moe_routed_scaling_factor']
-    )
+        device_limited_routed_scaling_factor=config[
+            'moe_routed_scaling_factor'],
+        topk_method=moe_topk_method)
     moe_config.validate()
 
     return config
@@ -244,8 +265,11 @@ def convert_deepseekv2(hf_model,
         normalization_mode=config['moe_renorm_mode'],
         device_limited_n_group=config['moe_n_group'],
         device_limited_topk_group=config['moe_topk_group'],
-        device_limited_routed_scaling_factor=config['moe_routed_scaling_factor']
-    )
+        device_limited_routed_scaling_factor=config[
+            'moe_routed_scaling_factor'],
+        topk_method=config["topk_method"])
+
+    first_k_dense_replace = config['first_k_dense_replace']
 
     layers_range = mapping.pp_layers(config['num_hidden_layers'])
 
@@ -400,7 +424,7 @@ def convert_deepseekv2(hf_model,
                 get_tllm_linear_weight(q_a_layernorm_weight, trtllm_prex +
                                        'attention.q_a_layernorm.'))
 
-        if moe_config.has_moe() and l > 0:
+        if moe_config.has_moe() and l >= first_k_dense_replace:
             rank_experts = list(range(moe_config.num_experts))
             if mapping.has_moe_ep():
                 rank_experts = mapping.ep_experts(moe_config.num_experts)
@@ -454,6 +478,14 @@ def convert_deepseekv2(hf_model,
             weights.update(
                 get_tllm_linear_weight(moe_experts_gate_weights,
                                        trtllm_prex + 'mlp.router.'))
+
+            if config["topk_method"] == "noaux_tc":
+                e_score_correction_bias = model_params[
+                    f'model.layers.{l}.mlp.gate.e_score_correction_bias']
+                weights.update(
+                    get_tllm_linear_weight(
+                        e_score_correction_bias,
+                        trtllm_prex + 'mlp.e_score_correction_bias.'))
 
             if moe_config.shared_expert_intermediate_size > 0:
                 shared_moe_up_proj_weights = get_weight(

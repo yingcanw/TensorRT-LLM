@@ -88,13 +88,14 @@ class DeepseekV2DecoderLayer(Module):
             normalization_mode=config.moe_renorm_mode,
             device_limited_n_group=config.moe_n_group,
             device_limited_topk_group=config.moe_topk_group,
+            topk_method=config.topk_method,
             device_limited_routed_scaling_factor=config.
             moe_routed_scaling_factor)
 
         # layer_config = LayerMLPConfig(config=[dense_config, moe_config], moe_layer_idx_min=0,
         #                             moe_layer_idx_max=config.num_hidden_layers,
         #                             total_num_layers=config.num_hidden_layers)
-        if moe_config.num_experts > 0 and layer_idx > 0:
+        if moe_config.num_experts > 0 and layer_idx >= config.first_k_dense_replace:
             hidden_act = config.hidden_act
             mlp_hidden_size = config.moe_inter_size
             mlp_kwargs = {'moe_config': moe_config, 'mapping': config.mapping}
