@@ -506,8 +506,8 @@ class MixtureOfExperts(Module):
         }
 
         if moe_config.topk_method == MoeConfig.TopKMethod.NOAUX_TC:
-            self.e_score_correction_bias = Parameter(shape=(self.num_experts),
-                                                     dtype=dtype)
+            self.e_score_correction_bias = Parameter(shape=(self.num_experts, ),
+                                                     dtype=trt.float32)
 
         self.init_experts()
 
@@ -555,7 +555,7 @@ class MixtureOfExperts(Module):
     def noaux_tc(self, logits):
         n_group = self.moe_config.device_limited_n_group
         scores = sigmoid(logits)
-        scores_with_bias = scores + unsqueeze(self.e_score_correction_bias, 0)
+        scores_with_bias = scores + self.e_score_correction_bias.value
         scores_shape = [
             shape(scores_with_bias, i) for i in range(scores_with_bias.ndim())
         ]
@@ -578,7 +578,9 @@ class MixtureOfExperts(Module):
         _, topk_idx = topk(scores_with_bias, k=self.moe_config.top_k, dim=-1)
         new_mask = scatter(scores * 0, -1, topk_idx,
                            topk_idx.cast(scores.dtype) * 0 + 1)
-        scores = scores * new_mask * \
+        scores = scores * new_mask
+        score_sum = sum(scores, dim=-1, keepdim=True) + 1e-20
+        scores = scores / score_sum * \
             self.moe_config.device_limited_routed_scaling_factor
         return scores
 

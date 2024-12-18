@@ -61,13 +61,6 @@ class DeepseekV2DecoderLayer(Module):
             position_embedding_type=PositionEmbeddingType.learned_absolute,
             rotary_embedding_base=config.rotary_base,
             rotary_embedding_scaling=None,
-            rotary_embedding_beta_fast=config.rotary_scaling['beta_fast'],
-            rotary_embedding_beta_slow=config.rotary_scaling['beta_slow'],
-            rotary_embedding_mscale=config.rotary_scaling['mscale'],
-            rotary_embedding_mscale_all_dim=config.
-            rotary_scaling['mscale_all_dim'],
-            rotary_embedding_origin_max_position=config.
-            rotary_scaling['original_max_position_embeddings'],
             rotary_scaling=config.rotary_scaling,
             tp_group=config.mapping.tp_group,
             tp_size=config.mapping.tp_size,

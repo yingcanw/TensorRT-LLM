@@ -53,14 +53,6 @@ def create_trt_config_from_hf(model_dir,
     hidden_act = 'swiglu'  # TRT-LLM request make gated activation explicit for MOE implementation
     rotary_base = hf_config.rope_theta
     rms_norm_eps = hf_config.rms_norm_eps
-    rotary_scaling_beta_fast = hf_config.rope_scaling['beta_fast']
-    rotary_scaling_beta_slow = hf_config.rope_scaling['beta_slow']
-    rotary_scaling_factor = hf_config.rope_scaling['factor']
-    rotary_scaling_mscale = hf_config.rope_scaling['mscale']
-    rotary_scaling_mscale_all_dim = hf_config.rope_scaling['mscale_all_dim']
-    rotary_scaling_original_max_position_embeddings = hf_config.rope_scaling[
-        'original_max_position_embeddings']
-    rotary_scaling_type = 'yarn'
     kv_lora_rank = hf_config.kv_lora_rank
     q_lora_rank = hf_config.q_lora_rank
     qk_nope_head_dim = hf_config.qk_nope_head_dim
@@ -95,10 +87,7 @@ def create_trt_config_from_hf(model_dir,
             moe_renorm_mode = MoeConfig.ExpertScaleNormalizationMode.NONE
     elif hf_config.topk_method == 'noaux_tc':
         moe_topk_method = MoeConfig.TopKMethod.NOAUX_TC
-        if moe_top_k > 1 and hf_config.norm_topk_prob:
-            moe_renorm_mode = MoeConfig.ExpertScaleNormalizationMode.DEVICE_LIMITED_RENORM
-        else:
-            moe_renorm_mode = MoeConfig.ExpertScaleNormalizationMode.DEVICE_LIMITED
+        moe_renorm_mode = MoeConfig.ExpertScaleNormalizationMode.DEVICE_LIMITED
     else:
         raise AssertionError(
             f'Unsupported topk_method in hf_config: {hf_config.topk_method}')
@@ -118,16 +107,7 @@ def create_trt_config_from_hf(model_dir,
         'hidden_act': hidden_act,
         'rotary_base': rotary_base,
         'norm_epsilon': rms_norm_eps,
-        'rotary_scaling': {
-            'beta_fast': rotary_scaling_beta_fast,
-            'beta_slow': rotary_scaling_beta_slow,
-            'factor': rotary_scaling_factor,
-            'mscale': rotary_scaling_mscale,
-            'mscale_all_dim': rotary_scaling_mscale_all_dim,
-            'original_max_position_embeddings':
-            rotary_scaling_original_max_position_embeddings,
-            'type': rotary_scaling_type,
-        },
+        'rotary_scaling': hf_config.rope_scaling,
         'mapping': {
             'world_size': mapping.tp_size * mapping.pp_size,
             'tp_size': mapping.tp_size,
@@ -479,12 +459,13 @@ def convert_deepseekv2(hf_model,
                                        trtllm_prex + 'mlp.router.'))
 
             if config["topk_method"] == "noaux_tc":
-                e_score_correction_bias = model_params[
-                    f'model.layers.{l}.mlp.gate.e_score_correction_bias']
+                e_score_correction_bias = get_weight(
+                    model_params, prefix + 'mlp.gate.e_score_correction_bias',
+                    torch.float32, '')
                 weights.update(
-                    get_tllm_linear_weight(
+                    get_param_weight(
                         e_score_correction_bias,
-                        trtllm_prex + 'mlp.e_score_correction_bias.'))
+                        trtllm_prex + 'mlp.e_score_correction_bias'))
 
             if moe_config.shared_expert_intermediate_size > 0:
                 shared_moe_up_proj_weights = get_weight(

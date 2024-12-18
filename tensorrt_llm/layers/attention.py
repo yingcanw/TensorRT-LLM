@@ -1913,11 +1913,6 @@ class DeepseekV2Attention(Attention):
             max_position_embeddings=1024,
             rotary_embedding_base=10000.0,
             rotary_embedding_scaling=None,
-            rotary_embedding_beta_fast=32,
-            rotary_embedding_beta_slow=1,
-            rotary_embedding_mscale=1,
-            rotary_embedding_mscale_all_dim=0,
-            rotary_embedding_origin_max_position=4096,
             rotary_scaling=None,
             tp_group=None,
             tp_size=1,
@@ -1965,7 +1960,7 @@ class DeepseekV2Attention(Attention):
                 return 1.0
             return 0.1 * mscale * math.log(scale) + 1.0
 
-        assert self.rotary_scaling is not None
+        # assert self.rotary_scaling is not None
         if self.rotary_scaling is not None:
             mscale_all_dim = self.rotary_scaling.get("mscale_all_dim", 0)
             scaling_factor = self.rotary_scaling["factor"]
@@ -1973,12 +1968,23 @@ class DeepseekV2Attention(Attention):
                 mscale = yarn_get_mscale(scaling_factor, mscale_all_dim)
                 self.q_scaling = 1.0 / (mscale * mscale)
 
-        embed_positions_for_gpt_attention = RopeEmbeddingUtils.create_sinusoidal_positions_for_deepseek_attention_plugin(
-            self.max_position_embeddings, self.qk_rope_head_dim,
-            self.rotary_embedding_base, self.rotary_scaling["factor"],
-            rotary_embedding_origin_max_position, rotary_embedding_beta_fast,
-            rotary_embedding_beta_slow, rotary_embedding_mscale,
-            rotary_embedding_mscale_all_dim)
+            embed_positions_for_gpt_attention = RopeEmbeddingUtils.create_sinusoidal_positions_for_deepseek_attention_plugin(
+                self.max_position_embeddings, self.qk_rope_head_dim,
+                self.rotary_embedding_base, self.rotary_scaling["factor"],
+                rotary_scaling['original_max_position_embeddings'],
+                self.rotary_scaling["beta_fast"],
+                self.rotary_scaling["beta_slow"], self.rotary_scaling["mscale"],
+                mscale_all_dim)
+        else:
+            embed_positions_for_gpt_attention = RopeEmbeddingUtils.create_sinusoidal_positions(
+                self.max_position_embeddings, self.qk_rope_head_dim,
+                self.rotary_embedding_base)
+            embed_positions_for_gpt_attention = embed_positions_for_gpt_attention.squeeze(
+                0)
+            sin, cos = np.split(embed_positions_for_gpt_attention, 2, 1)
+            embed_positions_for_gpt_attention = np.concatenate(
+                (cos, cos, sin, sin), axis=1)
+
         self.register_parameter(
             'embed_positions_for_gpt_attention',
             Parameter(embed_positions_for_gpt_attention, dtype='float32'))
