@@ -77,7 +77,6 @@ def create_trt_config_from_hf(model_dir,
     first_k_dense_replace = hf_config.first_k_dense_replace
     moe_layer_freq = hf_config.moe_layer_freq
     scoring_func = hf_config.scoring_func
-    fp8_format = hf_config.fp8_format
     topk_method = hf_config.topk_method
 
     assert moe_routed_scaling_factor > 0, 'routed_scaling_factor should be greater than 0'
@@ -144,16 +143,16 @@ def create_trt_config_from_hf(model_dir,
         'moe_num_experts': moe_num_experts,
         'moe_inter_size': moe_inter_size,
         'moe_num_shared_experts': moe_num_shared_experts,
-        'moe_top_k': moe_topk_method,
+        'moe_top_k': moe_top_k,
         'moe_renorm_mode': moe_renorm_mode,
         'moe_n_group': moe_n_group,
         'moe_topk_group': moe_topk_group,
         'moe_routed_scaling_factor': moe_routed_scaling_factor,
         'topk_method': topk_method,
+        'moe_topk_method': moe_topk_method,
         'first_k_dense_replace': first_k_dense_replace,
         'moe_layer_freq': moe_layer_freq,
         'scoring_func': scoring_func,
-        'fp8_format': fp8_format,
     }
 
     config.update(override_fields)
@@ -267,7 +266,7 @@ def convert_deepseekv2(hf_model,
         device_limited_topk_group=config['moe_topk_group'],
         device_limited_routed_scaling_factor=config[
             'moe_routed_scaling_factor'],
-        topk_method=config["topk_method"])
+        topk_method=config["moe_topk_method"])
 
     first_k_dense_replace = config['first_k_dense_replace']
 

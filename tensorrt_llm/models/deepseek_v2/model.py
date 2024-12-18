@@ -88,7 +88,7 @@ class DeepseekV2DecoderLayer(Module):
             normalization_mode=config.moe_renorm_mode,
             device_limited_n_group=config.moe_n_group,
             device_limited_topk_group=config.moe_topk_group,
-            topk_method=config.topk_method,
+            topk_method=config.moe_topk_method,
             device_limited_routed_scaling_factor=config.
             moe_routed_scaling_factor)
 
