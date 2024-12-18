@@ -20,14 +20,16 @@ import torch
 from ..._utils import pad_vocab_size, torch_dtype_to_str
 from ...functional import Tensor, non_gated_version, recv, send
 from ...layers import (MOE, AttentionMaskType, ColumnLinear,
-                       DeepseekV2Attention, Embedding, GatedMLP, MoeConfig,
+                       DeepseekV2Attention, Embedding, GatedMLP,
                        PositionEmbeddingType, RmsNorm, SharedMoE)
 from ...mapping import Mapping
 from ...module import Module
 from ...plugin import init_all_reduce_helper
 from ..modeling_utils import (DecoderLayerList, DecoderModelForCausalLM,
-                              PretrainedConfig)
-from .convert import convert_deepseekv2, create_trt_config_from_hf
+                              PretrainedConfig, QuantConfig)
+from .config import DeepSeekV2Config
+from .convert import (load_hf_deepseek, load_weights_from_hf_by_shard,
+                      load_weights_from_hf_model)
 
 
 class DeepseekV2DecoderLayer(Module):
@@ -73,17 +75,7 @@ class DeepseekV2DecoderLayer(Module):
 
         ### Distinguish dense MLP and MoE MLP
         # dense_config = DenseConfig(intermediate_size=config.intermediate_size)
-        moe_config = MoeConfig(
-            num_experts=config.moe_num_experts,
-            shared_expert_intermediate_size=config.moe_num_shared_experts *
-            config.moe_inter_size,
-            top_k=config.moe_top_k,
-            normalization_mode=config.moe_renorm_mode,
-            device_limited_n_group=config.moe_n_group,
-            device_limited_topk_group=config.moe_topk_group,
-            topk_method=config.moe_topk_method,
-            device_limited_routed_scaling_factor=config.
-            moe_routed_scaling_factor)
+        moe_config = config.moe
 
         # layer_config = LayerMLPConfig(config=[dense_config, moe_config], moe_layer_idx_min=0,
         #                             moe_layer_idx_max=config.num_hidden_layers,
@@ -235,22 +227,28 @@ class DeepseekV2ForCausalLM(DecoderModelForCausalLM):
 
     @classmethod
     def from_hugging_face(cls,
-                          hf_model,
                           model_dir,
                           dtype: str = 'auto',
                           mapping: Optional[Mapping] = None,
-                          override_fields={},
+                          quant_config: Optional[QuantConfig] = None,
                           **kwargs):
-        assert hf_model is not None
+        load_by_shard = kwargs.pop('load_by_shard', False)
+        load_model_on_cpu = kwargs.pop('load_model_on_cpu', False)
         if mapping is None:
             mapping = Mapping()
-        config = create_trt_config_from_hf(model_dir,
-                                           dtype,
-                                           mapping=mapping,
-                                           override_fields=override_fields)
-        print(config)
-        pretrained_config = PretrainedConfig.from_dict(config)
-        pretrained_config.set_rank(mapping.rank)  # TODO:remove this hack
+        config = DeepSeekV2Config.from_hugging_face(model_dir,
+                                                    dtype=dtype,
+                                                    mapping=mapping,
+                                                    quant_config=quant_config,
+                                                    **kwargs)
+        if load_by_shard:
+            weights = load_weights_from_hf_by_shard(model_dir, config)
+        else:
+            hf_model = load_hf_deepseek(model_dir, load_model_on_cpu)
+            weights = load_weights_from_hf_model(hf_model, config)
+        model = cls(config)
+        model.load(weights)
+        return model
 
         if dtype == 'auto':
             dtype = getattr(config, 'torch_dtype', None)

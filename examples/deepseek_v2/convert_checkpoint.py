@@ -23,7 +23,8 @@ from tensorrt_llm._utils import release_gc
 from tensorrt_llm.layers import MoeConfig
 from tensorrt_llm.mapping import Mapping
 from tensorrt_llm.models import DeepseekV2ForCausalLM
-from tensorrt_llm.models.deepseek_v2.convert import load_hf_deepseek
+from tensorrt_llm.models.modeling_utils import QuantConfig
+from tensorrt_llm.quantization import QuantAlgo
 
 
 def parse_arguments():
@@ -55,10 +56,13 @@ def parse_arguments():
                         type=str,
                         default='float16',
                         choices=['float32', 'bfloat16', 'float16'])
+    parser.add_argument('--load_by_shard',
+                        action='store_true',
+                        help='Load a pretrained model shard-by-shard.')
     parser.add_argument('--load_model_on_cpu',
                         default=False,
                         action="store_true",
-                        help='Choose to load HF cpkt into GPU')
+                        help='Choose to load HF cpkt into CPU')
     parser.add_argument(
         '--use_parallel_embedding',
         action="store_true",
@@ -75,6 +79,25 @@ def parse_arguments():
         'By default the embedding lookup table is sharded along vocab dimension (embedding_sharding_dim=0)'
         'To shard it along hidden dimension, set embedding_sharding_dim=1'
         'Note: embedding sharing is only enabled when embedding_sharding_dim=0')
+
+    parser.add_argument(
+        '--use_weight_only',
+        default=False,
+        action="store_true",
+        help='Quantize weights for the various GEMMs to INT4/INT8.'
+        'See --weight_only_precision to set the precision')
+    parser.add_argument(
+        '--weight_only_precision',
+        const='int8',
+        type=str,
+        nargs='?',
+        default='int8',
+        choices=['int8', 'int4'],
+        help=
+        'Define the precision for the weights when using weight-only quantization.'
+        'You must also use --use_weight_only for that argument to have an impact.'
+    )
+
     parser.add_argument('--output_dir',
                         type=str,
                         default='trtllm_checkpoint',
@@ -125,12 +148,29 @@ def parse_arguments():
     return args
 
 
+def precision_to_config(precision, group_size, quant_config) -> QuantConfig:
+    '''update config dict for weight-only quantization
+    '''
+    quant_config = QuantConfig()
+    precision_to_algo = {'int8': QuantAlgo.W8A16, 'int4': QuantAlgo.W4A16}
+    quant_config.quant_algo = precision_to_algo.get(precision)
+    return quant_config
+
+
+def args_to_quant_config(args: argparse.Namespace) -> QuantConfig:
+    '''return config dict with quantization info based on the command line args
+    '''
+    quant_config = QuantConfig()
+    if args.use_weight_only:
+        quant_config = precision_to_config(args.weight_only_precision,
+                                           args.group_size, quant_config)
+    return quant_config
+
+
 def args_to_build_options(args):
     return {
         'use_parallel_embedding': args.use_parallel_embedding,
         'embedding_sharding_dim': args.embedding_sharding_dim,
-        'disable_weight_only_quant_plugin':
-        args.disable_weight_only_quant_plugin,
         'load_model_on_cpu': args.load_model_on_cpu
     }
 
@@ -156,6 +196,7 @@ def execute(workers, func, args):
 
 def convert_and_save_hf(args):
     model_dir = args.model_dir
+    load_by_shard = args.load_by_shard
     world_size = args.tp_size * args.pp_size
     # Need to convert the cli args to the kay-value pairs and override them in the generate config dict.
     # Ideally these fields will be moved out of the config and pass them into build API, keep them here for compatibility purpose for now,
@@ -163,8 +204,7 @@ def convert_and_save_hf(args):
     override_fields = {}
     override_fields.update(args_to_build_options(args))
 
-    load_model_on_cpu = args.load_model_on_cpu
-    hf_model = load_hf_deepseek(model_dir, load_model_on_cpu)
+    quant_config = args_to_quant_config(args)
 
     def convert_and_save_rank(args, rank):
         mapping = Mapping(world_size=world_size,
@@ -175,7 +215,12 @@ def convert_and_save_hf(args):
                           moe_ep_size=args.moe_ep_size)
 
         deepseekv2 = DeepseekV2ForCausalLM.from_hugging_face(
-            hf_model, args.model_dir, args.dtype, mapping, **override_fields)
+            model_dir,
+            args.dtype,
+            mapping=mapping,
+            quant_config=quant_config,
+            load_by_shard=load_by_shard,
+            **override_fields)
         deepseekv2.save_checkpoint(args.output_dir, save_config=(rank == 0))
         del deepseekv2
 
@@ -187,7 +232,6 @@ def main():
     print(tensorrt_llm.__version__)
     args = parse_arguments()
 
-    args.tp_size * args.pp_size
     if (args.moe_tp_size == -1 and args.moe_ep_size == -1):
         # moe default to tp-only
         args.moe_tp_size = args.tp_size
