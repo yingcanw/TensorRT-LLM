@@ -1982,8 +1982,12 @@ class DeepseekV2Attention(Attention):
             embed_positions_for_gpt_attention = embed_positions_for_gpt_attention.squeeze(
                 0)
             sin, cos = np.split(embed_positions_for_gpt_attention, 2, 1)
+            cos_embed = np.expand_dims(np.concatenate((cos, cos), axis=1),
+                                       axis=2)
+            sin_embed = np.expand_dims(np.concatenate((sin, sin), axis=1),
+                                       axis=2)
             embed_positions_for_gpt_attention = np.concatenate(
-                (cos, cos, sin, sin), axis=1)
+                (cos_embed, sin_embed), axis=-1).reshape(1, -1)
 
         self.register_parameter(
             'embed_positions_for_gpt_attention',
