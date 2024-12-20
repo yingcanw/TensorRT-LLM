@@ -267,8 +267,12 @@ def load_weights_from_hf_model(hf_model,
             get_param_weight(kv_b_proj_weight,
                              trtllm_prex + 'attention.kv_b_proj'))
         weights.update(
-            get_tllm_linear_weight(o_proj_weight,
-                                   trtllm_prex + 'attention.dense.'))
+            get_tllm_linear_weight(
+                o_proj_weight,
+                trtllm_prex + 'attention.dense.',
+                use_weight_only=use_weight_only,
+                plugin_weight_only_quant_type=plugin_weight_only_quant_type,
+                use_gemm_woq_plugin=use_gemm_woq_plugin))
 
         if q_lora_rank is not None:
             weights.update(
