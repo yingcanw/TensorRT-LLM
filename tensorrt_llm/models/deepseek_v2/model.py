@@ -26,7 +26,7 @@ from ...mapping import Mapping
 from ...module import Module
 from ...plugin import init_all_reduce_helper
 from ..modeling_utils import (DecoderLayerList, DecoderModelForCausalLM,
-                              PretrainedConfig, QuantConfig)
+                              QuantConfig)
 from .config import DeepSeekV2Config
 from .convert import (load_hf_deepseek, load_weights_from_hf_by_shard,
                       load_weights_from_hf_model)
@@ -34,7 +34,7 @@ from .convert import (load_hf_deepseek, load_weights_from_hf_by_shard,
 
 class DeepseekV2DecoderLayer(Module):
 
-    def __init__(self, config: PretrainedConfig, layer_idx: int):
+    def __init__(self, config: DeepSeekV2Config, layer_idx: int):
         super().__init__()
         self.layer_idx = layer_idx
         self.config = config
@@ -104,6 +104,7 @@ class DeepseekV2DecoderLayer(Module):
                           bias=False,
                           tp_group=config.mapping.tp_group,
                           tp_size=config.mapping.tp_size,
+                          quant_mode=config.quant_mode,
                           **mlp_kwargs)
 
         ### Pose layernorm in Deepseek v2 is same as Llama
@@ -145,7 +146,7 @@ class DeepseekV2DecoderLayer(Module):
 
 class DeepseekV2Model(Module):
 
-    def __init__(self, config: PretrainedConfig) -> None:
+    def __init__(self, config: DeepSeekV2Config) -> None:
         super().__init__()
         init_all_reduce_helper()  # enable use_customer_all_reduce
         self.dtype = config.dtype
@@ -207,8 +208,9 @@ class DeepseekV2Model(Module):
 
 
 class DeepseekV2ForCausalLM(DecoderModelForCausalLM):
+    config_class = DeepSeekV2Config
 
-    def __init__(self, config: PretrainedConfig):
+    def __init__(self, config: DeepSeekV2Config):
         transformer = DeepseekV2Model(config)
         vocab_size_padded = pad_vocab_size(config.vocab_size,
                                            config.mapping.tp_size)

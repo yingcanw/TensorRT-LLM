@@ -40,6 +40,9 @@ class DeepSeekV2Config(PretrainedConfig):
         self.rotary_scaling = rotary_scaling
         self.residual_mlp = residual_mlp
         self.disable_weight_only_quant_plugin = disable_weight_only_quant_plugin
+        if isinstance(moe, dict):
+            moe = MoeConfig.from_dict(moe)
+        assert isinstance(moe, MoeConfig)
         self.moe = moe.validate()
         self.remove_duplicated_kv_heads = remove_duplicated_kv_heads
         self.fc_after_embed = False
@@ -74,8 +77,6 @@ class DeepSeekV2Config(PretrainedConfig):
                           mapping: Optional[Mapping] = None,
                           quant_config: Optional[QuantConfig] = None,
                           **kwargs):
-        pass
-
         trust_remote_code = kwargs.pop('trust_remote_code', True)
         hf_config = AutoConfig.from_pretrained(
             model_dir, trust_remote_code=trust_remote_code)
@@ -98,10 +99,7 @@ class DeepSeekV2Config(PretrainedConfig):
                 moe_renorm_mode = MoeConfig.ExpertScaleNormalizationMode.NONE
         elif hf_config.topk_method == 'noaux_tc':
             moe_topk_method = MoeConfig.TopKMethod.NOAUX_TC
-            if moe_top_k > 1 and hf_config.norm_topk_prob:
-                moe_renorm_mode = MoeConfig.ExpertScaleNormalizationMode.DEVICE_LIMITED_RENORM
-            else:
-                moe_renorm_mode = MoeConfig.ExpertScaleNormalizationMode.DEVICE_LIMITED
+            moe_renorm_mode = MoeConfig.ExpertScaleNormalizationMode.DEVICE_LIMITED
         else:
             raise AssertionError(
                 f'Unsupported topk_method in hf_config: {hf_config.topk_method}'
@@ -136,6 +134,7 @@ class DeepSeekV2Config(PretrainedConfig):
             device_limited_topk_group=hf_config.topk_group,
             device_limited_routed_scaling_factor=moe_routed_scaling_factor,
             topk_method=moe_topk_method)
+        moe_config.validate()
 
         return cls(
             architecture=hf_config.architectures[0],
@@ -152,6 +151,7 @@ class DeepSeekV2Config(PretrainedConfig):
             norm_epsilon=hf_config.rms_norm_eps,
             rotary_base=hf_config.rope_theta,
             rotary_scaling=rotary_scaling,  # TODO: modify this
+            moe_inter_size=hf_config.moe_intermediate_size,
             moe=moe_config,
             mapping=mapping,
             quantization=quant_config,
@@ -164,5 +164,5 @@ class DeepSeekV2Config(PretrainedConfig):
             first_k_dense_replace=hf_config.first_k_dense_replace,
             moe_layer_freq=hf_config.moe_layer_freq,
             coring_func=hf_config.scoring_func,
-            fp8_format=hf_config.fp8_format,
+            fp8_format=False,
             **kwargs)

@@ -19,158 +19,13 @@ import torch
 from transformers import AutoConfig, AutoModelForCausalLM
 
 from ..._utils import pad_vocab_size, release_gc
+from ...layers import MoeConfig
 from ...quantization import QuantAlgo
 from ..convert_utils import get_tllm_linear_weight
 from .config import DeepSeekV2Config
 
 # `Override num_hidden_layers` used for reduce number of hidden layers in DeepseekV2ForCausalLM for debug purpose
 OVERRIDE_HIDDEN_LAYERS = None  # 2
-
-# ## Convert config parameters to dict
-# def create_trt_config_from_hf(model_dir,
-#                               dtype,
-#                               mapping: Mapping,
-#                               quant_config: QuantConfig,
-#                               override_fields: dict = {}):
-#     config = {}
-#     assert isinstance(model_dir, str)
-#     hf_config = AutoConfig.from_pretrained(model_dir, trust_remote_code=True)
-#     # Override num_hidden_layers
-#     if OVERRIDE_HIDDEN_LAYERS is not None:
-#         hf_config.num_hidden_layers = OVERRIDE_HIDDEN_LAYERS
-#         print(
-#             f'Override hidden layers to {hf_config.num_hidden_layers} for DeepseekV2ForCausalLM'
-#         )
-#     dtype = dtype
-#     n_layer = hf_config.num_hidden_layers
-#     n_head = hf_config.num_attention_heads
-#     n_embd = hf_config.hidden_size
-#     inter_size = hf_config.intermediate_size
-#     n_kv_head = hf_config.num_key_value_heads
-#     vocab_size = hf_config.vocab_size
-#     n_positions = hf_config.max_position_embeddings
-#     hidden_act = 'swiglu'  # TRT-LLM request make gated activation explicit for MOE implementation
-#     rotary_base = hf_config.rope_theta
-#     rms_norm_eps = hf_config.rms_norm_eps
-#     rotary_scaling_beta_fast = hf_config.rope_scaling['beta_fast']
-#     rotary_scaling_beta_slow = hf_config.rope_scaling['beta_slow']
-#     rotary_scaling_factor = hf_config.rope_scaling['factor']
-#     rotary_scaling_mscale = hf_config.rope_scaling['mscale']
-#     rotary_scaling_mscale_all_dim = hf_config.rope_scaling['mscale_all_dim']
-#     rotary_scaling_original_max_position_embeddings = hf_config.rope_scaling[
-#         'original_max_position_embeddings']
-#     rotary_scaling_type = 'yarn'
-#     kv_lora_rank = hf_config.kv_lora_rank
-#     q_lora_rank = hf_config.q_lora_rank
-#     qk_nope_head_dim = hf_config.qk_nope_head_dim
-#     qk_rope_head_dim = hf_config.qk_rope_head_dim
-#     v_head_dim = hf_config.v_head_dim
-#     moe_num_experts = hf_config.n_routed_experts
-#     moe_inter_size = hf_config.moe_intermediate_size
-#     moe_num_shared_experts = hf_config.n_shared_experts
-#     moe_top_k = hf_config.num_experts_per_tok
-#     moe_n_group = hf_config.n_group
-#     moe_topk_group = hf_config.topk_group
-#     moe_routed_scaling_factor = hf_config.routed_scaling_factor
-
-#     first_k_dense_replace = hf_config.first_k_dense_replace
-#     moe_layer_freq = hf_config.moe_layer_freq
-#     scoring_func = hf_config.scoring_func
-#     fp8_format = hf_config.fp8_format
-#     topk_method = hf_config.topk_method
-
-#     assert moe_routed_scaling_factor > 0, 'routed_scaling_factor should be greater than 0'
-#     if hf_config.topk_method == 'group_limited_greedy':
-#         moe_topk_method = MoeConfig.TopKMethod.GROUP_LIMITED_GREEDY
-#         if moe_top_k > 1 and hf_config.norm_topk_prob:
-#             moe_renorm_mode = MoeConfig.ExpertScaleNormalizationMode.DEVICE_LIMITED_RENORM
-#         else:
-#             moe_renorm_mode = MoeConfig.ExpertScaleNormalizationMode.DEVICE_LIMITED
-#     elif hf_config.topk_method == 'greedy':
-#         moe_topk_method = MoeConfig.TopKMethod.GREEDY
-#         assert moe_routed_scaling_factor == 1.0, 'The combination of topk_method == greedy and routed_scaling_factor != 1.0 is not supported'
-#         if moe_top_k > 1 and hf_config.norm_topk_prob:
-#             moe_renorm_mode = MoeConfig.ExpertScaleNormalizationMode.RENORMALIZE
-#         else:
-#             moe_renorm_mode = MoeConfig.ExpertScaleNormalizationMode.NONE
-#     elif hf_config.topk_method == 'noaux_tc':
-#         moe_topk_method = MoeConfig.TopKMethod.NOAUX_TC
-#         if moe_top_k > 1 and hf_config.norm_topk_prob:
-#             moe_renorm_mode = MoeConfig.ExpertScaleNormalizationMode.DEVICE_LIMITED_RENORM
-#         else:
-#             moe_renorm_mode = MoeConfig.ExpertScaleNormalizationMode.DEVICE_LIMITED
-#     else:
-#         raise AssertionError(
-#             f'Unsupported topk_method in hf_config: {hf_config.topk_method}')
-
-#     config = {
-#         'architecture': 'DeepseekV2ForCausalLM',
-#         'dtype': dtype,
-#         'logits_type': 'float32',
-#         'num_hidden_layers': n_layer,
-#         'num_attention_heads': n_head,
-#         'hidden_size': n_embd,
-#         'intermediate_size': inter_size,
-#         'num_key_value_heads': n_kv_head,
-#         'vocab_size': vocab_size,
-#         'position_embedding_type': 'rope_gpt_neox',
-#         'max_position_embeddings': n_positions,
-#         'hidden_act': hidden_act,
-#         'rotary_base': rotary_base,
-#         'norm_epsilon': rms_norm_eps,
-#         'rotary_scaling': {
-#             'beta_fast': rotary_scaling_beta_fast,
-#             'beta_slow': rotary_scaling_beta_slow,
-#             'factor': rotary_scaling_factor,
-#             'mscale': rotary_scaling_mscale,
-#             'mscale_all_dim': rotary_scaling_mscale_all_dim,
-#             'original_max_position_embeddings':
-#             rotary_scaling_original_max_position_embeddings,
-#             'type': rotary_scaling_type,
-#         },
-#         'mapping': {
-#             'world_size': mapping.tp_size * mapping.pp_size,
-#             'tp_size': mapping.tp_size,
-#             'pp_size': mapping.pp_size,
-#             'moe_tp_size': mapping.moe_tp_size,
-#             'moe_ep_size': mapping.moe_ep_size,
-#         },
-#         'kv_lora_rank': kv_lora_rank,
-#         'q_lora_rank': q_lora_rank,
-#         'qk_nope_head_dim': qk_nope_head_dim,
-#         'qk_rope_head_dim': qk_rope_head_dim,
-#         'v_head_dim': v_head_dim,
-#         'moe_num_experts': moe_num_experts,
-#         'moe_inter_size': moe_inter_size,
-#         'moe_num_shared_experts': moe_num_shared_experts,
-#         'moe_top_k': moe_topk_method,
-#         'moe_renorm_mode': moe_renorm_mode,
-#         'moe_n_group': moe_n_group,
-#         'moe_topk_group': moe_topk_group,
-#         'moe_routed_scaling_factor': moe_routed_scaling_factor,
-#         'topk_method': topk_method,
-#         'first_k_dense_replace': first_k_dense_replace,
-#         'moe_layer_freq': moe_layer_freq,
-#         'scoring_func': scoring_func,
-#         'fp8_format': fp8_format,
-#     }
-
-#     config.update(override_fields)
-
-#     moe_config = MoeConfig(
-#         num_experts=config['moe_num_experts'],
-#         shared_expert_intermediate_size=config['moe_num_shared_experts'] *
-#         config['moe_inter_size'],
-#         top_k=config['moe_top_k'],
-#         normalization_mode=config['moe_renorm_mode'],
-#         device_limited_n_group=config['moe_n_group'],
-#         device_limited_topk_group=config['moe_topk_group'],
-#         device_limited_routed_scaling_factor=config[
-#             'moe_routed_scaling_factor'],
-#         topk_method=moe_topk_method)
-#     moe_config.validate()
-
-#     return config
 
 
 ## Get HF model
@@ -483,7 +338,7 @@ def load_weights_from_hf_model(hf_model,
                 get_tllm_linear_weight(moe_experts_gate_weights,
                                        trtllm_prex + 'mlp.router.'))
 
-            if config["topk_method"] == "noaux_tc":
+            if moe_config.topk_method == MoeConfig.TopKMethod.NOAUX_TC:
                 e_score_correction_bias = get_weight(
                     model_params, prefix + 'mlp.gate.e_score_correction_bias',
                     torch.float32, '')

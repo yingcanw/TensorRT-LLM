@@ -148,7 +148,7 @@ def parse_arguments():
     return args
 
 
-def precision_to_config(precision, group_size, quant_config) -> QuantConfig:
+def precision_to_config(precision, quant_config) -> QuantConfig:
     '''update config dict for weight-only quantization
     '''
     quant_config = QuantConfig()
@@ -163,7 +163,7 @@ def args_to_quant_config(args: argparse.Namespace) -> QuantConfig:
     quant_config = QuantConfig()
     if args.use_weight_only:
         quant_config = precision_to_config(args.weight_only_precision,
-                                           args.group_size, quant_config)
+                                           quant_config)
     return quant_config
 
 
