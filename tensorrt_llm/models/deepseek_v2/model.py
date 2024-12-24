@@ -13,23 +13,26 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 from typing import Optional
 
 import torch
+from tqdm import tqdm
 
 from ..._utils import pad_vocab_size, torch_dtype_to_str
 from ...functional import Tensor, non_gated_version, recv, send
 from ...layers import (MOE, AttentionMaskType, ColumnLinear,
                        DeepseekV2Attention, Embedding, GatedMLP,
                        PositionEmbeddingType, RmsNorm, SharedMoE)
+from ...layers.moe import MOEWeightWrapper
 from ...mapping import Mapping
 from ...module import Module
 from ...plugin import init_all_reduce_helper
+from ..model_weights_loader import ModelWeightsLoader
 from ..modeling_utils import (DecoderLayerList, DecoderModelForCausalLM,
                               QuantConfig)
 from .config import DeepSeekV2Config
-from .convert import (load_hf_deepseek, load_weights_from_hf_by_shard,
-                      load_weights_from_hf_model)
+from .convert import load_hf_deepseek, load_weights_from_hf_model
 
 
 class DeepseekV2DecoderLayer(Module):
@@ -234,7 +237,6 @@ class DeepseekV2ForCausalLM(DecoderModelForCausalLM):
                           mapping: Optional[Mapping] = None,
                           quant_config: Optional[QuantConfig] = None,
                           **kwargs):
-        load_by_shard = kwargs.pop('load_by_shard', False)
         load_model_on_cpu = kwargs.pop('load_model_on_cpu', False)
         if mapping is None:
             mapping = Mapping()
@@ -243,13 +245,76 @@ class DeepseekV2ForCausalLM(DecoderModelForCausalLM):
                                                     mapping=mapping,
                                                     quant_config=quant_config,
                                                     **kwargs)
-        if load_by_shard:
-            weights = load_weights_from_hf_by_shard(model_dir, config)
+        if os.environ.get("TRTLLM_DISABLE_UNIFIED_CONVERTER") is None:
+            if config.q_lora_rank is not None:  # Deepseek-V2&V3
+                custom_dict = {
+                    "fused_a": ["q_a_proj", "kv_a_proj_with_mqa"],
+                    "q_a_layernrom": "q_a_layernorm",
+                    "kv_a_layernorm": "kv_a_layernorm",
+                    "q_b_proj": "q_b_proj.weight",
+                    "kv_b_proj": "kv_b_proj.weight",
+                    "fused_q_proj": ["q_b_proj.weight", "kv_b_proj.weight"],
+                    "shared_expert": "shared_experts",
+                    "e_score_correction_bias": "gate.e_score_correction_bias",
+                }
+            else:  # Deepseek-V2-Lite
+                custom_dict = {
+                    "fused_a": "kv_a_proj_with_mqa",
+                    "kv_a_layernorm": "kv_a_layernorm",
+                    "q_b_proj": "q_proj.weight",
+                    "kv_b_proj": "kv_b_proj.weight",
+                    "fused_q_proj": ["q_proj.weight", "kv_b_proj.weight"],
+                    "shared_expert": "shared_experts",
+                    "e_score_correction_bias": "gate.e_score_correction_bias",
+                }
+
+            loader = ModelWeightsLoader(model_dir, custom_dict)
+            model = cls(config)
+            for tllm_key, _ in model.named_parameters():
+                sub_module = model
+                for attr in tllm_key.split(".")[:-1]:
+                    sub_module = getattr(sub_module, attr)
+                if "router" in tllm_key or isinstance(sub_module,
+                                                      MOEWeightWrapper):
+                    sub_module_dic = sub_module.tllm_to_externel_key_dict
+                    sub_module_dic["mlp"] = "mlp"
+                    if "fc" in sub_module_dic.keys():
+                        print(sub_module_dic["fc"])
+                        sub_module_dic["fc"] = [
+                            hf_keyword.replace("w1", "gate_proj")
+                            for hf_keyword in sub_module_dic["fc"]
+                        ]
+                        sub_module_dic["fc"] = [
+                            hf_keyword.replace("w3", "up_proj")
+                            for hf_keyword in sub_module_dic["fc"]
+                        ]
+                    if "proj" in sub_module_dic.keys():
+                        sub_module_dic["proj"] = [
+                            hf_keyword.replace("w2", "down_proj")
+                            for hf_keyword in sub_module_dic["proj"]
+                        ]
+                    sub_module.tllm_to_externel_key_dict = sub_module_dic
+
+            def concat_gate_up_proj(weights):
+                return torch.cat(weights, dim=-2)
+
+            loader.update_key_mapping(model)
+            tllm_weights = {}
+            for tllm_key, _ in tqdm(model.named_parameters()):
+                if tllm_key.endswith("shared_expert.fc.weight"):
+                    updated_map = loader.tllm_to_externel_key_dict
+                    updated_map["fc"] = ["up_proj", "gate_proj"]
+                    loader.tllm_to_externel_key_dict = updated_map
+                    tllm_weights.update(
+                        loader.load(tllm_key, concat_gate_up_proj))
+                else:
+                    tllm_weights.update(loader.load(tllm_key))
+            loader.fill(tllm_weights)
         else:
             hf_model = load_hf_deepseek(model_dir, load_model_on_cpu)
             weights = load_weights_from_hf_model(hf_model, config)
-        model = cls(config)
-        model.load(weights)
+            model = cls(config)
+            model.load(weights)
         return model
 
         if dtype == 'auto':

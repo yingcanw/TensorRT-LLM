@@ -2215,3 +2215,61 @@ class DeepseekV2Attention(Attention):
             return (context, past_key_value)
         else:
             return context
+
+    def postprocess(self, tllm_key, weights, **kwargs):
+        if tllm_key.endswith("fused_a") and not self.is_deepseek_v2_lite:
+            assert isinstance(weights, list) and len(weights) == 2
+            fused_a_weight = torch.cat(
+                [weights[0], weights[1]],
+                dim=0,
+            )
+            return {tllm_key: fused_a_weight}
+        elif tllm_key.endswith("kv_b_proj"):
+            splited_kv_b_proj = weights.unflatten(0, [
+                self.num_attention_heads // self.tp_size,
+                self.qk_nope_head_dim + self.v_head_dim
+            ])
+            k_nope_weight, v_weight = splited_kv_b_proj.split(
+                [self.qk_nope_head_dim, self.v_head_dim],
+                dim=1,
+            )
+            kv_b_proj_weight = torch.concat([
+                k_nope_weight.reshape(
+                    self.num_attention_heads * self.qk_nope_head_dim //
+                    self.tp_size, self.kv_lora_rank),
+                v_weight.reshape(
+                    self.num_attention_heads * self.v_head_dim // self.tp_size,
+                    self.kv_lora_rank)
+            ],
+                                            dim=0)
+            return {tllm_key: kv_b_proj_weight}
+        elif tllm_key.endswith("fused_q_proj"):
+            assert isinstance(weights, list) and len(weights) == 2
+            splited_q_b_proj = weights[0].unflatten(0, [
+                self.num_attention_heads // self.tp_size,
+                self.qk_nope_head_dim + self.qk_rope_head_dim
+            ])
+            splited_kv_b_proj = weights[1].unflatten(0, [
+                self.num_attention_heads // self.tp_size,
+                self.qk_nope_head_dim + self.v_head_dim
+            ])
+            q_nope_weight, q_pe_weight = splited_q_b_proj.split(
+                [self.qk_nope_head_dim, self.qk_rope_head_dim],
+                dim=1,
+            )
+            k_nope_weight, _ = splited_kv_b_proj.split(
+                [self.qk_nope_head_dim, self.v_head_dim],
+                dim=1,
+            )
+            fused_q_nope_weight = torch.einsum(
+                'hdq,hdk->hkq',
+                q_nope_weight,
+                k_nope_weight,
+            )
+            fused_q_weight = torch.cat(
+                [fused_q_nope_weight, q_pe_weight],
+                dim=1,
+            ).flatten(start_dim=0, end_dim=1)
+            return {tllm_key: fused_q_weight}
+        else:
+            return {tllm_key: weights}

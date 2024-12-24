@@ -498,10 +498,3 @@ def load_weights_from_hf_model(hf_model,
     print(f'Weights loaded. Total time: {t}')
     #print(set(weights.keys()))
     return weights
-
-
-def load_weights_from_hf_by_shard(hf_model,
-                                  config: DeepSeekV2Config,
-                                  use_parallel_embedding=False,
-                                  sharding_dim=0):
-    raise NotImplementedError("No by shard implementation")

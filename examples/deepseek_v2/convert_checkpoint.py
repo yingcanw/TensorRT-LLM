@@ -56,9 +56,6 @@ def parse_arguments():
                         type=str,
                         default='float16',
                         choices=['float32', 'bfloat16', 'float16'])
-    parser.add_argument('--load_by_shard',
-                        action='store_true',
-                        help='Load a pretrained model shard-by-shard.')
     parser.add_argument('--load_model_on_cpu',
                         default=False,
                         action="store_true",
@@ -196,7 +193,6 @@ def execute(workers, func, args):
 
 def convert_and_save_hf(args):
     model_dir = args.model_dir
-    load_by_shard = args.load_by_shard
     world_size = args.tp_size * args.pp_size
     # Need to convert the cli args to the kay-value pairs and override them in the generate config dict.
     # Ideally these fields will be moved out of the config and pass them into build API, keep them here for compatibility purpose for now,
@@ -219,7 +215,6 @@ def convert_and_save_hf(args):
             args.dtype,
             mapping=mapping,
             quant_config=quant_config,
-            load_by_shard=load_by_shard,
             **override_fields)
         deepseekv2.save_checkpoint(args.output_dir, save_config=(rank == 0))
         del deepseekv2
