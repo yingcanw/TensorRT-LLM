@@ -1939,6 +1939,7 @@ class DeepseekV2Attention(Attention):
                          enable_qkv=False)
 
         self.tp_size = tp_size
+        self.tp_rank = tp_rank
 
         if q_lora_rank is None:
             self.q_lora_rank = hidden_size
@@ -2217,42 +2218,69 @@ class DeepseekV2Attention(Attention):
             return context
 
     def postprocess(self, tllm_key, weights, **kwargs):
-        if tllm_key.endswith("fused_a") and not self.is_deepseek_v2_lite:
-            assert isinstance(weights, list) and len(weights) == 2
-            fused_a_weight = torch.cat(
-                [weights[0], weights[1]],
-                dim=0,
-            )
-            return {tllm_key: fused_a_weight}
-        elif tllm_key.endswith("kv_b_proj"):
-            splited_kv_b_proj = weights.unflatten(0, [
-                self.num_attention_heads // self.tp_size,
+
+        def split(v, tp_size, idx, dim=0):
+            if tp_size == 1:
+                return v
+            if len(v.shape) == 1:
+                return torch.chunk(v, tp_size)[idx].contiguous()
+            else:
+                return torch.chunk(v, tp_size, dim=dim)[idx].contiguous()
+
+        if tllm_key.endswith("kv_b_proj"):
+            kv_b_proj = weights.unflatten(0, [
+                self.num_attention_heads * self.tp_size,
                 self.qk_nope_head_dim + self.v_head_dim
             ])
+            splited_kv_b_proj = split(kv_b_proj,
+                                      self.tp_size,
+                                      self.tp_rank,
+                                      dim=0)
             k_nope_weight, v_weight = splited_kv_b_proj.split(
                 [self.qk_nope_head_dim, self.v_head_dim],
                 dim=1,
             )
             kv_b_proj_weight = torch.concat([
                 k_nope_weight.reshape(
-                    self.num_attention_heads * self.qk_nope_head_dim //
-                    self.tp_size, self.kv_lora_rank),
-                v_weight.reshape(
-                    self.num_attention_heads * self.v_head_dim // self.tp_size,
-                    self.kv_lora_rank)
+                    self.num_attention_heads * self.qk_nope_head_dim,
+                    self.kv_lora_rank),
+                v_weight.reshape(self.num_attention_heads * self.v_head_dim,
+                                 self.kv_lora_rank)
             ],
                                             dim=0)
             return {tllm_key: kv_b_proj_weight}
-        elif tllm_key.endswith("fused_q_proj"):
-            assert isinstance(weights, list) and len(weights) == 2
-            splited_q_b_proj = weights[0].unflatten(0, [
-                self.num_attention_heads // self.tp_size,
+        elif tllm_key.endswith("q_b_proj"):
+            q_b_proj = weights.unflatten(0, [
+                self.num_attention_heads * self.tp_size,
                 self.qk_nope_head_dim + self.qk_rope_head_dim
             ])
-            splited_kv_b_proj = weights[1].unflatten(0, [
-                self.num_attention_heads // self.tp_size,
+            splited_q_b_proj = split(q_b_proj,
+                                     self.tp_size,
+                                     self.tp_rank,
+                                     dim=0)
+            q_b_proj_weight = splited_q_b_proj.reshape(
+                self.num_attention_heads *
+                (self.qk_nope_head_dim + self.qk_rope_head_dim),
+                self.q_lora_rank)
+            return {tllm_key: q_b_proj_weight}
+        elif tllm_key.endswith("fused_q_proj"):
+            assert isinstance(weights, list) and len(weights) == 2
+            q_b_proj = weights[0].unflatten(0, [
+                self.num_attention_heads * self.tp_size,
+                self.qk_nope_head_dim + self.qk_rope_head_dim
+            ])
+            splited_q_b_proj = split(q_b_proj,
+                                     self.tp_size,
+                                     self.tp_rank,
+                                     dim=0)
+            kv_b_proj = weights[1].unflatten(0, [
+                self.num_attention_heads * self.tp_size,
                 self.qk_nope_head_dim + self.v_head_dim
             ])
+            splited_kv_b_proj = split(kv_b_proj,
+                                      self.tp_size,
+                                      self.tp_rank,
+                                      dim=0)
             q_nope_weight, q_pe_weight = splited_q_b_proj.split(
                 [self.qk_nope_head_dim, self.qk_rope_head_dim],
                 dim=1,

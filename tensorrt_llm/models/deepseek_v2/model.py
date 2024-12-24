@@ -279,7 +279,6 @@ class DeepseekV2ForCausalLM(DecoderModelForCausalLM):
                     sub_module_dic = sub_module.tllm_to_externel_key_dict
                     sub_module_dic["mlp"] = "mlp"
                     if "fc" in sub_module_dic.keys():
-                        print(sub_module_dic["fc"])
                         sub_module_dic["fc"] = [
                             hf_keyword.replace("w1", "gate_proj")
                             for hf_keyword in sub_module_dic["fc"]

@@ -191,14 +191,12 @@ class ModelWeightsLoader:
         # Retrieve shard index
         if key in self.shard_map:
             ptr_idx = self.shard_map[key]
-            #print("tensor found in HF!")
         else:
             return None
 
         if self.format == ModelWeightsFormat.SAFETENSORS:
             tensor = self.shards[ptr_idx].get_slice(key)
             tensor_shape = tensor.get_shape()
-            #print("tensor_shape:", tensor_shape)
             if tensor_shape == []:
                 tensor = self.shards[ptr_idx].get_tensor(key).unsqueeze(0)
                 tensor_shape = tensor.shape
@@ -242,7 +240,6 @@ class ModelWeightsLoader:
             preprocess (function, Optional): Customized preprocess function for step 3.
             skip_tp (bool): Skip TP in case of the derived TP config is inappropriate.
         """
-        # print("processing: ", tllm_key)
         tp_rank = self.model.config.mapping.tp_rank
 
         sub_module = self.model
@@ -282,7 +279,6 @@ class ModelWeightsLoader:
             tp_rank = self.model.config.mapping.moe_tp_rank
         external_key = self.translate_to_external_key(
             tllm_key, tllm_to_externel_key_dict)
-        # print("external_key: ", external_key)
         if isinstance(external_key, list):
             v = [
                 self.load_tensor(k, tp_size, tp_dim, tp_rank)
@@ -290,7 +286,6 @@ class ModelWeightsLoader:
             ]
         else:
             v = self.load_tensor(external_key, tp_size, tp_dim, tp_rank)
-
         if preprocess is not None:
             v = preprocess(v)
 
@@ -316,7 +311,6 @@ class ModelWeightsLoader:
             if v is not None and not v.is_contiguous():
                 weight_dict[k] = v.contiguous()
 
-        #print("-----------------------------------------")
         return weight_dict
 
     def update_key_mapping(self, model):

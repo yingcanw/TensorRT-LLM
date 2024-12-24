@@ -426,7 +426,7 @@ class Linear(LinearBase):
                     weights = w.reshape(-1, self.in_features)  # Weight
                 else:
                     weights = w.reshape(-1)  # Bias
-        elif tllm_key.endswith("fused_a") and isinstance(weights, list):
+        elif tllm_key.endswith("fused_a.weight") and isinstance(weights, list):
             weights = torch.cat(
                 [weights[0], weights[1]],
                 dim=0,
